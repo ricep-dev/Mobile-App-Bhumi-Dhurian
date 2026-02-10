@@ -1,55 +1,58 @@
-// file: lib/screens/home_screen.dart
+// lib/screens/home_screen.dart
 
 import 'package:bhumidurianapp/screens/profile_screen.dart';
+import 'package:bhumidurianapp/screens/product_detail_screen.dart';
+import 'package:bhumidurianapp/screens/orders_screen.dart';
 import 'package:bhumidurianapp/services/api_baru.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
-import 'package.http.dart' as http;
 import 'cart_screen.dart';
+import 'package:bhumidurianapp/screens/search_screen.dart';
 
 // Impor halaman kategori generik
 import 'package:bhumidurianapp/screens/category_products_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  // Constructor tidak perlu menerima onAddToCart lagi karena sudah dikelola di dalam state
-  const HomeScreen({super.key, required Null Function(dynamic item) onAddToCart});
+  const HomeScreen({
+    super.key,
+    required Null Function(dynamic item) onAddToCart,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Semua state Anda tetap sama
   int _selectedIndex = 0;
   PageController _pageController = PageController();
   Timer? _timer;
   int _currentPage = 0;
   final List<Map<String, dynamic>> _bannerList = [
-      {
-        'image': 'assets/durian_montong.jpg',
-        'title': 'Durian Montong',
-        'subtitle': 'Diskon!!!',
-        'discount': '40%',
-        'price': 'Rp 81.000/kg',
-        'color': const Color(0xFF2E7D32),
-      },
-      {
-        'image': 'assets/promo_stecu.png',
-        'title': 'Mie Nyemek',
-        'subtitle': 'Promo Spesial',
-        'discount': '10%',
-        'price': 'Rp 7.500',
-        'color': const Color(0xFFE91E63),
-      },
-      {
-        'image': 'assets/promo 3.jpg',
-        'title': 'Iga Bhumi + Sambel Penyet',
-        'subtitle': 'Hemat Banget!',
-        'discount': '20%',
-        'price': 'Rp 50.000',
-        'color': const Color(0xFF3F51B5),
-      },
-    ];
+    {
+      'image': 'assets/durian_montong.jpg',
+      'title': 'Durian Montong',
+      'subtitle': 'Diskon!!!',
+      'discount': '40%',
+      'price': 'Rp 81.000/kg',
+      'color': const Color(0xFF2E7D32),
+    },
+    {
+      'image': 'assets/promo_stecu.png',
+      'title': 'Mie Nyemek',
+      'subtitle': 'Promo Spesial',
+      'discount': '10%',
+      'price': 'Rp 7.500',
+      'color': const Color(0xFFE91E63),
+    },
+    {
+      'image': 'assets/promo 3.jpg',
+      'title': 'Iga Bhumi + Sambel Penyet',
+      'subtitle': 'Hemat Banget!',
+      'discount': '20%',
+      'price': 'Rp 50.000',
+      'color': const Color(0xFF3F51B5),
+    },
+  ];
   List<Map<String, dynamic>>? _products;
   bool _isLoading = false;
   String? _error;
@@ -58,12 +61,17 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isUserLoading = false;
   String? _userError;
 
+  // rekomendasi (opsional)
+  List<Map<String, dynamic>> _recommended = [];
+  bool _isRecLoading = false;
+
   @override
   void initState() {
     super.initState();
     _startAutoScroll();
     _loadProducts();
     _loadUserProfile();
+    _loadRecommendations();
   }
 
   @override
@@ -114,14 +122,18 @@ class _HomeScreenState extends State<HomeScreen> {
       try {
         final userData = await ApiBaru.getUserProfile();
         if (userData != null) {
-          print('User Data successfully fetched: $userData');
+          debugPrint('User Data successfully fetched: $userData');
           setState(() {
             _userData = userData;
             _isUserLoading = false;
           });
+        } else {
+          setState(() {
+            _isUserLoading = false;
+          });
         }
       } catch (e) {
-        print('Error loading user profile: $e');
+        debugPrint('Error loading user profile: $e');
         setState(() {
           _userError = 'Error loading user profile: $e';
           _isUserLoading = false;
@@ -130,7 +142,33 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Fungsi ini yang akan dikirimkan ke halaman kategori
+  Future<void> _loadRecommendations() async {
+    setState(() => _isRecLoading = true);
+    try {
+      int userId = 1;
+      if (_userData != null) {
+        if (_userData!['id'] != null) {
+          userId = int.tryParse('${_userData!['id']}') ?? userId;
+        } else if (_userData!['user_id'] != null) {
+          userId = int.tryParse('${_userData!['user_id']}') ?? userId;
+        }
+      }
+      final recs = await ApiBaru.getRecommendationsForUser(
+        userId: userId,
+        limit: 8,
+      );
+      setState(() {
+        _recommended = recs ?? [];
+        _isRecLoading = false;
+      });
+    } catch (e) {
+      debugPrint('Error load recommendations: $e');
+      setState(() {
+        _isRecLoading = false;
+      });
+    }
+  }
+
   void _addToCart(String title, String price, String imageUrl, int productId) {
     setState(() {
       _cartItems.add({
@@ -141,7 +179,9 @@ class _HomeScreenState extends State<HomeScreen> {
         'product_id': productId,
       });
     });
-    print('Item added to cart: $title, Price: $price, Product ID: $productId');
+    debugPrint(
+      'Item added to cart: $title, Price: $price, Product ID: $productId',
+    );
   }
 
   @override
@@ -153,7 +193,6 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Bagian Header dan Banner (Tidak ada perubahan)
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 20,
@@ -170,9 +209,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Row(
                       children: [
-                        const CircleAvatar(
+                        CircleAvatar(
                           radius: 18,
-                          backgroundImage: AssetImage('assets/user1.jpg'),
+                          backgroundColor: Colors.grey.shade300,
+                          backgroundImage: _userData != null &&
+                                  _userData!['image_url'] != null &&
+                                  _userData!['image_url'].toString().isNotEmpty
+                              ? NetworkImage(_userData!['image_url'])
+                              : null,
+                          child: (_userData == null ||
+                                  _userData!['image_url'] == null ||
+                                  _userData!['image_url'].toString().isEmpty)
+                              ? const Icon(
+                                  Icons.person,
+                                  size: 18,
+                                  color: Colors.white,
+                                )
+                              : null,
                         ),
                         const SizedBox(width: 10),
                         Text(
@@ -231,22 +284,36 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ],
                       ),
-                      child: TextField(
-                        decoration: InputDecoration(
-                          hintText: "Cari menu favorit kamu",
-                          hintStyle: TextStyle(
-                            color: Colors.grey[500],
-                            fontSize: 14,
-                          ),
-                          prefixIcon: Icon(
-                            Icons.search,
-                            color: Colors.grey[500],
-                            size: 20,
-                          ),
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 14,
+                      child: GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => SearchScreen(
+                                onAddToCart: _addToCart,
+                                cartItems: _cartItems,
+                              ),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.search,
+                                color: Colors.grey[500],
+                                size: 20,
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                "Cari menu favorit kamu",
+                                style: TextStyle(
+                                  color: Colors.grey[500],
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -472,8 +539,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              
-              // --- PERUBAHAN DI SINI: Mengirim fungsi dan data ke CategoryProductsScreen ---
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -485,8 +550,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       'assets/makanan.png',
                       CategoryProductsScreen(
                         categoryName: 'Makanan',
-                        onAddToCart: _addToCart, // Kirim fungsi
-                        cartItems: _cartItems,   // Kirim data keranjang
+                        onAddToCart: _addToCart,
+                        cartItems: _cartItems,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -525,7 +590,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
-
               const SizedBox(height: 25),
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 20),
@@ -571,11 +635,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   builder: (context) => CartScreen(cartItems: _cartItems),
                 ),
               );
+            } else if (index == 2) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const OrdersScreen()),
+              );
             } else if (index == 3) {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => const ProfileScreen()),
-              );
+              ).then((_) {
+                _loadUserProfile();
+              });
             }
           },
           type: BottomNavigationBarType.fixed,
@@ -588,19 +659,19 @@ class _HomeScreenState extends State<HomeScreen> {
           items: const [
             BottomNavigationBarItem(
               icon: Icon(Icons.home, size: 28),
-              label: '',
+              label: 'Home',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.shopping_cart, size: 28),
-              label: '',
+              label: 'Keranjang',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.receipt_long, size: 28),
-              label: '',
+              label: 'Pesanan',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.person, size: 28),
-              label: '',
+              label: 'Profil',
             ),
           ],
         ),
@@ -620,20 +691,13 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         for (int i = 0; i < _products!.length; i += 2)
           Padding(
-            padding: const EdgeInsets.only(bottom:12.0),
+            padding: const EdgeInsets.only(bottom: 12.0),
             child: Row(
               children: [
                 Expanded(
                   child: () {
                     final product = _products![i];
-                    final productId = product['product_id'];
-                    return _buildPopularCard(
-                      product['name'] ?? 'Product',
-                      product['rating']?.toString() ?? '0.0',
-                      'Rp ${product['price']?.toString() ?? '0'}',
-                      'http://192.168.1.3:9090/${product['image_url'] ?? ''}',
-                      productId ?? 0,
-                    );
+                    return _buildPopularCard(product);
                   }(),
                 ),
                 if (i + 1 < _products!.length) ...[
@@ -641,14 +705,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Expanded(
                     child: () {
                       final product = _products![i + 1];
-                      final productId = product['product_id'];
-                      return _buildPopularCard(
-                        product['name'] ?? 'Product',
-                        product['rating']?.toString() ?? '0.0',
-                        'Rp ${product['price']?.toString() ?? '0'}',
-                        'http://1192.168.1.3:9090/${product['image_url'] ?? ''}',
-                        productId ?? 0,
-                      );
+                      return _buildPopularCard(product);
                     }(),
                   ),
                 ] else
@@ -661,7 +718,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildCategoryCard(
-      String title, Color color, String imageAsset, Widget destinationScreen) {
+    String title,
+    Color color,
+    String imageAsset,
+    Widget destinationScreen,
+  ) {
     return GestureDetector(
       onTap: () {
         Navigator.push(
@@ -746,139 +807,183 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Widget _buildPopularCard(
-    String title,
-    String rating,
-    String price,
-    String imageUrl,
-    int productId,
-  ) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            height: 100,
-            decoration: BoxDecoration(
-              color: Colors.grey[200],
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(12),
-                topRight: Radius.circular(12),
-              ),
-            ),
-            child: ClipRRect(
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(12),
-                topRight: Radius.circular(12),
-              ),
-              child: Image.network(
-                imageUrl,
-                width: double.infinity,
-                height: 100,
-                fit: BoxFit.cover,
-                loadingBuilder: (context, child, loadingProgress) {
-                  if (loadingProgress == null) return child;
-                  return const Center(child: CircularProgressIndicator());
-                },
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    color: Colors.grey[200],
-                    child: const Icon(
-                      Icons.image,
-                      color: Colors.grey,
-                      size: 40,
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                    height: 1.2,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+  Widget _buildPopularCard(Map<String, dynamic> product) {
+    final title = product['name'] ?? 'Product';
+    final rating = product['rating']?.toString() ?? '0.0';
+    final price = 'Rp ${product['price']?.toString() ?? '0'}';
+    final rawImage = product['image_url'] ?? product['image'] ?? '';
+    String? imageUrl;
+    if (rawImage != null && rawImage.toString().isNotEmpty) {
+      final rawStr = rawImage.toString();
+      final encoded = Uri.encodeFull(rawStr);
+      imageUrl =
+          rawStr.startsWith('http')
+              ? rawStr
+              : 'http://192.168.31.101:9090/$encoded';
+    }
+    final productId = product['product_id'] ?? product['id'] ?? 0;
+
+    return GestureDetector(
+      onTap: () async {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder:
+                (_) => ProductDetailScreen(
+                  product: product,
+                  onAddToCart: _addToCart,
                 ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    const Icon(Icons.star, color: Colors.amber, size: 14),
-                    const SizedBox(width: 2),
-                    Text(
-                      rating,
-                      style: const TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                  ],
+          ),
+        );
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              height: 100,
+              decoration: BoxDecoration(
+                color: Colors.grey[200],
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(12),
+                  topRight: Radius.circular(12),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        price,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFFFDD835),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    GestureDetector(
-                      onTap: () {
-                        // Memanggil fungsi utama untuk tambah ke keranjang
-                        _addToCart(title, price, imageUrl, productId);
-                        // Langsung navigasi ke keranjang
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder:
-                                (context) => CartScreen(cartItems: _cartItems),
+              ),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(12),
+                  topRight: Radius.circular(12),
+                ),
+                child:
+                    imageUrl != null
+                        ? Image.network(
+                          imageUrl,
+                          width: double.infinity,
+                          height: 100,
+                          fit: BoxFit.cover,
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            return const Center(
+                              child: CircularProgressIndicator(),
+                            );
+                          },
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              color: Colors.grey[200],
+                              child: const Icon(
+                                Icons.image,
+                                color: Colors.grey,
+                                size: 40,
+                              ),
+                            );
+                          },
+                        )
+                        : Container(
+                          color: Colors.grey[200],
+                          child: const Icon(
+                            Icons.image,
+                            color: Colors.grey,
+                            size: 40,
                           ),
-                        );
-                      },
-                      child: Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFDD835),
-                          borderRadius: BorderRadius.circular(8),
                         ),
-                        child: const Icon(
-                          Icons.shopping_cart,
-                          size: 18,
-                          color: Colors.black87,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black87,
+                      height: 1.2,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      const Icon(Icons.star, color: Colors.amber, size: 14),
+                      const SizedBox(width: 2),
+                      Text(
+                        rating,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          price,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFFDD835),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        onTap: () {
+                          _addToCart(
+                            title,
+                            price,
+                            imageUrl ?? '',
+                            productId is int
+                                ? productId
+                                : int.tryParse('$productId') ?? 0,
+                          );
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder:
+                                  (context) =>
+                                      CartScreen(cartItems: _cartItems),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFDD835),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
+                            Icons.shopping_cart,
+                            size: 18,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

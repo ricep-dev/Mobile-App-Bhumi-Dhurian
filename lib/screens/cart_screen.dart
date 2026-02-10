@@ -46,13 +46,11 @@ class _CartScreenState extends State<CartScreen> {
   @override
   Widget build(BuildContext context) {
     int total = calculateTotal();
-
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       body: SafeArea(
         child: Column(
           children: [
-            // --- HEADER DENGAN TOMBOL KEMBALI ---
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: const BoxDecoration(
@@ -64,14 +62,12 @@ class _CartScreenState extends State<CartScreen> {
               ),
               child: Row(
                 children: [
-                  // Tombol Kembali
                   IconButton(
                     icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black87, size: 20),
                     onPressed: () {
-                      Navigator.pop(context); // Aksi untuk kembali
+                      Navigator.pop(context);
                     },
                   ),
-                  // Judul yang diperluas agar tetap di tengah
                   const Expanded(
                     child: Text(
                       "Keranjangku",
@@ -79,11 +75,11 @@ class _CartScreenState extends State<CartScreen> {
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black87),
                     ),
                   ),
-                  // Widget kosong untuk menyeimbangkan tombol kembali, memastikan judul benar-benar di tengah
                   const SizedBox(width: 48), 
                 ],
               ),
             ),
+
             // --- KONTEN KERANJANG ---
             Expanded(
               child: _cartItems.isEmpty

@@ -61,11 +61,15 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
                   }
                   if (!snapshot.hasData || snapshot.data!.isEmpty) {
                     return const Center(
-                        child: Text('Tidak ada produk dalam kategori ini.'));
+                      child: Text('Tidak ada produk dalam kategori ini.'),
+                    );
                   }
                   final products = snapshot.data!;
                   return ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
                     itemCount: products.length,
                     itemBuilder: (context, index) {
                       final product = products[index];
@@ -76,7 +80,7 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
                         rating: product['rating']?.toString() ?? '0.0',
                         price: product['price'] ?? 0,
                         imageUrl:
-                            'http://192.168.1.3:9090/${product['image_url'] ?? ''}',
+                            'http://192.168.31.101:9090/${product['image_url'] ?? ''}',
                       );
                     },
                   );
@@ -109,7 +113,11 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
                   color: Colors.white,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.arrow_back, color: Colors.black, size: 20),
+                child: const Icon(
+                  Icons.arrow_back,
+                  color: Colors.black,
+                  size: 20,
+                ),
               ),
             ),
             Expanded(
@@ -139,7 +147,7 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
     required String imageUrl,
   }) {
     final formattedPrice = formatCurrency(price);
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
@@ -163,12 +171,16 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
               width: 80,
               height: 80,
               fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) => Container(
-                width: 80,
-                height: 80,
-                color: Colors.grey[200],
-                child: const Icon(Icons.image_not_supported, color: Colors.grey),
-              ),
+              errorBuilder:
+                  (context, error, stackTrace) => Container(
+                    width: 80,
+                    height: 80,
+                    color: Colors.grey[200],
+                    child: const Icon(
+                      Icons.image_not_supported,
+                      color: Colors.grey,
+                    ),
+                  ),
             ),
           ),
           const SizedBox(width: 12),
@@ -225,7 +237,11 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
                 color: Colors.yellow[700],
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.shopping_cart, color: Colors.white, size: 24),
+              child: const Icon(
+                Icons.shopping_cart,
+                color: Colors.white,
+                size: 24,
+              ),
             ),
           ),
         ],

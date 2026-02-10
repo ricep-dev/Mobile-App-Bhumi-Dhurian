@@ -1,11 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart'; // Diperlukan untuk kIsWeb
-import 'package:bhumidurianapp/screens/reservation_screen.dart'; // Sesuaikan path Anda
+import 'package:flutter/foundation.dart';
+import 'package:bhumidurianapp/screens/reservation_screen.dart';
 import 'package:bhumidurianapp/services/api_baru.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class ConfirmationScreen extends StatefulWidget {
   final List<Map<String, dynamic>> cartItems;
@@ -19,8 +20,9 @@ class ConfirmationScreen extends StatefulWidget {
 class _ConfirmationScreenState extends State<ConfirmationScreen> {
   // --- STATE UNTUK KONTROL UI & DATA ---
   String _selectedService = "Delivery";
-  XFile? _buktiPembayaranFile; // Menggunakan XFile agar platform-agnostic
+  XFile? _buktiPembayaranFile;
   Map<String, dynamic>? _reservationData;
+  String _paymentMethod = "manual"; // manual | midtrans
 
   final TextEditingController _addressController = TextEditingController();
   Map<String, dynamic>? _userData;
@@ -94,48 +96,122 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
     });
   }
   
+  // ✅ HANDLER ORDER DENGAN FLOW YANG SUDAH DISESUAIKAN
   Future<void> _handleOrder() async {
-    if (_buktiPembayaranFile == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Harap unggah bukti pembayaran.")));
+    // ================= VALIDASI =================
+    if (_paymentMethod == "manual" && _buktiPembayaranFile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Harap unggah bukti pembayaran.")),
+      );
       return;
     }
     if (_selectedService == "Delivery" && _addressController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Alamat pengiriman wajib diisi untuk layanan Delivery.")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Alamat pengiriman wajib diisi untuk layanan Delivery.")),
+      );
       return;
     }
     if (_selectedService == "Dine In" && _reservationData == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Anda harus membuat reservasi untuk layanan Dine In.")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Anda harus membuat reservasi untuk layanan Dine In.")),
+      );
       return;
     }
 
     setState(() => _isPlacingOrder = true);
 
     try {
+      // ================= PREPARE ITEMS =================
       final itemsPayload = widget.cartItems.map((item) {
         return {
           "product_id": item['product_id'],
           "quantity": item['quantity'],
-          "price": double.tryParse(item['price'].toString().replaceAll(RegExp(r'[^0-9]'), '')) ?? 0.0,
+          "price": int.parse(
+            item['price'].toString().replaceAll(RegExp(r'[^0-9]'), ''),
+          ),
         };
       }).toList();
       final itemsJsonString = jsonEncode(itemsPayload);
 
-      final response = await ApiBaru.createOrder(
-        buktiPembayaran: _buktiPembayaranFile!,
-        paymentMethod: "transfer_bank", // Default karena UI pilihan dihapus
-        orderType: _selectedService,
-        itemsDataJson: itemsJsonString,
-        shippingAddress: _selectedService == "Delivery" ? _addressController.text : null,
-        reservationTableNumber: _reservationData?['table_number'],
-        reservationTime: (_reservationData?['reservation_time'] as DateTime?)?.toUtc().toIso8601String(),
-        reservationGuestCount: _reservationData?['guest_count']?.toString(),
-        reservationSpecialRequest: _reservationData?['special_request'],
-      );
+      // ================= JIKA MANUAL (TRANSFER BANK) =================
+      if (_paymentMethod == "manual") {
+        final orderResponse = await ApiBaru.createOrder(
+          buktiPembayaran: _buktiPembayaranFile!,
+          paymentMethod: "transfer_bank",
+          orderType: _selectedService,
+          itemsDataJson: itemsJsonString,
+          shippingAddress: _selectedService == "Delivery" ? _addressController.text : null,
+          reservationTableNumber: _reservationData?['table_number'],
+          reservationTime: (_reservationData?['reservation_time'] as DateTime?)?.toUtc().toIso8601String(),
+          reservationGuestCount: _reservationData?['guest_count']?.toString(),
+          reservationSpecialRequest: _reservationData?['special_request'],
+        );
 
-      await _showSuccessDialog(response['message'] ?? "Pesanan berhasil dibuat!");
+        await _showSuccessDialog(orderResponse['message'] ?? "Pesanan berhasil dibuat!");
+        return;
+      }
+
+      // ================= JIKA MIDTRANS =================
+      if (_paymentMethod == "midtrans") {
+        // 📌 STEP 1: Buat order dengan Midtrans (tanpa bukti pembayaran)
+        final orderResponse = await ApiBaru.createOrderMidtrans(
+          orderType: _selectedService,
+          itemsDataJson: itemsJsonString,
+          shippingAddress: _selectedService == "Delivery" ? _addressController.text : null,
+          reservationTableNumber: _reservationData?['table_number'],
+          reservationTime: (_reservationData?['reservation_time'] as DateTime?)?.toUtc().toIso8601String(),
+          reservationGuestCount: _reservationData?['guest_count']?.toString(),
+          reservationSpecialRequest: _reservationData?['special_request'],
+        );
+
+        // 📌 STEP 2: Ambil order_id dari response
+        final orderId = orderResponse['data']?['order_id'];
+        
+        if (orderId == null) {
+          throw Exception("Order ID tidak ditemukan dari server");
+        }
+
+        // 📌 STEP 3: Buat snap token menggunakan order_id
+        final snapResponse = await ApiBaru.createMidtransSnap(orderId: orderId);
+        final snapToken = snapResponse['snap_token'];
+        
+        if (snapToken == null || snapToken.toString().isEmpty) {
+          throw Exception("Snap token tidak ditemukan dari server");
+        }
+
+        // 📌 STEP 4: Buka halaman pembayaran Midtrans
+        final url = Uri.parse(
+          "https://app.sandbox.midtrans.com/snap/v2/vtweb/$snapToken",
+        );
+        
+        final launched = await launchUrl(
+          url,
+          mode: LaunchMode.externalApplication,
+        );
+
+        if (!launched) {
+          throw Exception("Tidak dapat membuka halaman pembayaran Midtrans");
+        }
+
+        // 📌 STEP 5: Kembali ke home setelah membuka Midtrans
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Silakan selesaikan pembayaran di browser"),
+              duration: Duration(seconds: 3),
+            ),
+          );
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
+        return;
+      }
       
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: ${e.toString().replaceAll("Exception: ", "")}")));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: ${e.toString().replaceAll("Exception: ", "")}")),
+        );
+      }
     } finally {
       if (mounted) {
         setState(() => _isPlacingOrder = false);
@@ -171,7 +247,10 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFFFDD835),
         elevation: 0,
-        title: const Text("Konfirmasi Pesanan", style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
+        title: const Text(
+          "Konfirmasi Pesanan",
+          style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold),
+        ),
         iconTheme: const IconThemeData(color: Colors.black87),
         centerTitle: true,
       ),
@@ -193,8 +272,12 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
                         _buildReservationSummary(),
                         const SizedBox(height: 20),
                       ],
-                      _buildPaymentForm(),
-                      const SizedBox(height: 24),
+                      _buildPaymentMethodSelector(),
+                      const SizedBox(height: 20),
+                      if (_paymentMethod == "manual") ...[
+                        _buildPaymentForm(),
+                        const SizedBox(height: 24),
+                      ],
                       _buildItemSummary(),
                     ],
                   ),
@@ -208,7 +291,12 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
   // --- KOMPONEN-KOMPONEN WIDGET ---
 
   Widget _buildServiceSelector() {
-    final services = {"Delivery": Icons.motorcycle, "Pickup": Icons.shopping_bag, "Dine In": Icons.restaurant};
+    final services = {
+      "Delivery": Icons.motorcycle,
+      "Pickup": Icons.shopping_bag,
+      "Dine In": Icons.restaurant
+    };
+    
     return Row(
       children: services.entries.map((entry) {
         final isSelected = _selectedService == entry.key;
@@ -230,13 +318,23 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
               decoration: BoxDecoration(
                 color: isSelected ? const Color(0xFFFDD835) : Colors.white,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: isSelected ? Colors.orange : Colors.grey[300]!),
+                border: Border.all(
+                  color: isSelected ? Colors.orange : Colors.grey[300]!,
+                ),
               ),
               child: Column(
                 children: [
-                  Icon(entry.value, color: isSelected ? Colors.black87 : Colors.grey[600]),
+                  Icon(
+                    entry.value,
+                    color: isSelected ? Colors.black87 : Colors.grey[600],
+                  ),
                   const SizedBox(height: 8),
-                  Text(entry.key, style: TextStyle(fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+                  Text(
+                    entry.key,
+                    style: TextStyle(
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -250,7 +348,10 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("Alamat Pengiriman", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        const Text(
+          "Alamat Pengiriman",
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
         const SizedBox(height: 10),
         TextField(
           controller: _addressController,
@@ -259,10 +360,93 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
             hintText: "Masukkan alamat lengkap...",
             filled: true,
             fillColor: Colors.white,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide.none,
+            ),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildPaymentMethodSelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Metode Pembayaran",
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: _paymentButton(
+                label: "Transfer Bank",
+                value: "manual",
+                icon: Icons.account_balance,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _paymentButton(
+                label: "Midtrans",
+                value: "midtrans",
+                icon: Icons.payment,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _paymentButton({
+    required String label,
+    required String value,
+    required IconData icon,
+  }) {
+    final isSelected = _paymentMethod == value;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _paymentMethod = value;
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFFDD835) : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? Colors.orange : Colors.grey[300]!,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? Colors.black87 : Colors.grey[600],
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  color: isSelected ? Colors.black87 : Colors.grey[700],
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
   
@@ -270,7 +454,10 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("Upload Bukti Pembayaran", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        const Text(
+          "Upload Bukti Pembayaran",
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
         const SizedBox(height: 10),
         Container(
           width: double.infinity,
@@ -278,25 +465,28 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.grey[300]!)
+            border: Border.all(color: Colors.grey[300]!),
           ),
           child: InkWell(
             onTap: _pickImage,
             child: _buktiPembayaranFile == null
-              ? const Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.cloud_upload_outlined, size: 40, color: Colors.grey),
-                    SizedBox(height: 8),
-                    Text("Ketuk untuk memilih gambar", style: TextStyle(color: Colors.grey)),
-                  ],
-                )
-              : ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: kIsWeb
-                      ? Image.network(_buktiPembayaranFile!.path, fit: BoxFit.cover)
-                      : Image.file(File(_buktiPembayaranFile!.path), fit: BoxFit.cover),
-                ),
+                ? const Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.cloud_upload_outlined, size: 40, color: Colors.grey),
+                      SizedBox(height: 8),
+                      Text(
+                        "Ketuk untuk memilih gambar",
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ],
+                  )
+                : ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: kIsWeb
+                        ? Image.network(_buktiPembayaranFile!.path, fit: BoxFit.cover)
+                        : Image.file(File(_buktiPembayaranFile!.path), fit: BoxFit.cover),
+                  ),
           ),
         ),
       ],
@@ -312,7 +502,10 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("Detail Reservasi Meja", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        const Text(
+          "Detail Reservasi Meja",
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
         const SizedBox(height: 10),
         Container(
           padding: const EdgeInsets.all(16),
@@ -323,26 +516,35 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
           ),
           child: Column(
             children: [
-              Row(children: [
-                const Icon(Icons.table_restaurant_outlined, size: 18, color: Colors.blue),
-                const SizedBox(width: 8),
-                Text("Meja: ${_reservationData?['table_number'] ?? ''}", style: const TextStyle(fontWeight: FontWeight.bold)),
-              ]),
+              Row(
+                children: [
+                  const Icon(Icons.table_restaurant_outlined, size: 18, color: Colors.blue),
+                  const SizedBox(width: 8),
+                  Text(
+                    "Meja: ${_reservationData?['table_number'] ?? ''}",
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
               const SizedBox(height: 8),
-              Row(children: [
-                const Icon(Icons.calendar_today_outlined, size: 18, color: Colors.blue),
-                const SizedBox(width: 8),
-                Expanded(child: Text("Waktu: $formattedTime")),
-              ]),
+              Row(
+                children: [
+                  const Icon(Icons.calendar_today_outlined, size: 18, color: Colors.blue),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text("Waktu: $formattedTime")),
+                ],
+              ),
               const SizedBox(height: 8),
-              Row(children: [
-                const Icon(Icons.people_alt_outlined, size: 18, color: Colors.blue),
-                const SizedBox(width: 8),
-                Text("Jumlah Tamu: ${_reservationData?['guest_count'] ?? ''} orang"),
-              ]),
+              Row(
+                children: [
+                  const Icon(Icons.people_alt_outlined, size: 18, color: Colors.blue),
+                  const SizedBox(width: 8),
+                  Text("Jumlah Tamu: ${_reservationData?['guest_count'] ?? ''} orang"),
+                ],
+              ),
             ],
           ),
-        )
+        ),
       ],
     );
   }
@@ -351,23 +553,35 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("Ringkasan Pesanan", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        const Text(
+          "Ringkasan Pesanan",
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
         const SizedBox(height: 10),
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(10)
+            borderRadius: BorderRadius.circular(10),
           ),
           child: Column(
             children: widget.cartItems.map((item) {
               return ListTile(
                 leading: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: Image.network(item['imageUrl'] ?? 'https://via.placeholder.com/150', width: 50, height: 50, fit: BoxFit.cover)),
+                  child: Image.network(
+                    item['imageUrl'] ?? 'https://via.placeholder.com/150',
+                    width: 50,
+                    height: 50,
+                    fit: BoxFit.cover,
+                  ),
+                ),
                 title: Text(item['title'] ?? 'Nama Produk'),
                 subtitle: Text("Qty: ${item['quantity']}"),
-                trailing: Text(item['price'].toString(), style: const TextStyle(fontWeight: FontWeight.w500)),
+                trailing: Text(
+                  item['price'].toString(),
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                ),
               );
             }).toList(),
           ),
@@ -378,13 +592,23 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
 
   Widget _buildBottomBar() {
     final total = _calculateTotal();
-    final currencyFormatter = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
+    final currencyFormatter = NumberFormat.currency(
+      locale: 'id_ID',
+      symbol: 'Rp ',
+      decimalDigits: 0,
+    );
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: const BoxDecoration(
         color: Colors.white,
-        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, -2))]
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 10,
+            offset: Offset(0, -2),
+          ),
+        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -392,10 +616,17 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text("Total Pesanan:", style: TextStyle(fontSize: 16, color: Colors.grey)),
+              const Text(
+                "Total Pesanan:",
+                style: TextStyle(fontSize: 16, color: Colors.grey),
+              ),
               Text(
                 currencyFormatter.format(total),
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.orange),
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange,
+                ),
               ),
             ],
           ),
@@ -408,11 +639,23 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
                 backgroundColor: const Color(0xFFFDD835),
                 foregroundColor: Colors.black87,
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               child: _isPlacingOrder
-                  ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.black87))
-                  : const Text("Buat Pesanan Sekarang", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ? const SizedBox(
+                      height: 24,
+                      width: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3,
+                        color: Colors.black87,
+                      ),
+                    )
+                  : const Text(
+                      "Buat Pesanan Sekarang",
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
             ),
           ),
         ],
