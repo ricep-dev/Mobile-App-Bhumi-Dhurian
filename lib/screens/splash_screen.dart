@@ -112,7 +112,7 @@ class _SplashScreenState extends State<SplashScreen>
                     ),
                     SizedBox(height: 8),
                     Text(
-                      "Di balik duri ada kenikmatan",
+                      "Di Balik Duri Ada Kenikmatan",
                       style: TextStyle(
                         fontSize: 16,
                         color: Colors.brown,

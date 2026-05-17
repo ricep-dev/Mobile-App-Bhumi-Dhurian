@@ -23,7 +23,7 @@ class UploadPhotoService {
 
     if (userId == null || token == null) return false;
 
-    final uri = Uri.parse('http://192.168.31.101:3000/api/user/upload-profile/$userId'); // Ganti IP sesuai server kamu
+    final uri = Uri.parse('http://10.10.11.51:3000/api/user/upload-profile/$userId'); // Ganti IP sesuai server kamu
 
     final request = http.MultipartRequest('POST', uri)
       ..headers['Authorization'] = 'Bearer $token'

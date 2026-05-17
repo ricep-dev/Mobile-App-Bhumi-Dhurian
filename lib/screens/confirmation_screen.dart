@@ -23,6 +23,7 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
   XFile? _buktiPembayaranFile;
   Map<String, dynamic>? _reservationData;
   String _paymentMethod = "manual"; // manual | midtrans
+  String _selectedBank = "BCA"; // BCA | BRI | Mandiri | BNI
 
   final TextEditingController _addressController = TextEditingController();
   Map<String, dynamic>? _userData;
@@ -76,7 +77,11 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
 
   Future<void> _navigateToReservation() async {
     final result = await Navigator.of(context).push<Map<String, dynamic>>(
-      MaterialPageRoute(builder: (context) => const ReservationScreen()),
+      MaterialPageRoute(
+        builder: (context) => ReservationScreen(
+          token: _userData?['token'] ?? '',
+        ),
+      ),
     );
 
     if (result != null && mounted) {
@@ -95,7 +100,7 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
       return sum + (price * quantity);
     });
   }
-  
+
   // ✅ HANDLER ORDER DENGAN FLOW YANG SUDAH DISESUAIKAN
   Future<void> _handleOrder() async {
     // ================= VALIDASI =================
@@ -150,10 +155,8 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
         await _showSuccessDialog(orderResponse['message'] ?? "Pesanan berhasil dibuat!");
         return;
       }
-
       // ================= JIKA MIDTRANS =================
       if (_paymentMethod == "midtrans") {
-        // 📌 STEP 1: Buat order dengan Midtrans (tanpa bukti pembayaran)
         final orderResponse = await ApiBaru.createOrderMidtrans(
           orderType: _selectedService,
           itemsDataJson: itemsJsonString,
@@ -164,26 +167,24 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
           reservationSpecialRequest: _reservationData?['special_request'],
         );
 
-        // 📌 STEP 2: Ambil order_id dari response
-        final orderId = orderResponse['data']?['order_id'];
-        
+        final orderId = orderResponse['order_id'];
+
         if (orderId == null) {
+          print("Response order dari server: $orderResponse");
           throw Exception("Order ID tidak ditemukan dari server");
         }
 
-        // 📌 STEP 3: Buat snap token menggunakan order_id
         final snapResponse = await ApiBaru.createMidtransSnap(orderId: orderId);
         final snapToken = snapResponse['snap_token'];
-        
+
         if (snapToken == null || snapToken.toString().isEmpty) {
           throw Exception("Snap token tidak ditemukan dari server");
         }
 
-        // 📌 STEP 4: Buka halaman pembayaran Midtrans
         final url = Uri.parse(
           "https://app.sandbox.midtrans.com/snap/v2/vtweb/$snapToken",
         );
-        
+
         final launched = await launchUrl(
           url,
           mode: LaunchMode.externalApplication,
@@ -193,7 +194,6 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
           throw Exception("Tidak dapat membuka halaman pembayaran Midtrans");
         }
 
-        // 📌 STEP 5: Kembali ke home setelah membuka Midtrans
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -205,7 +205,6 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
         }
         return;
       }
-      
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -296,7 +295,7 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
       "Pickup": Icons.shopping_bag,
       "Dine In": Icons.restaurant
     };
-    
+
     return Row(
       children: services.entries.map((entry) {
         final isSelected = _selectedService == entry.key;
@@ -370,78 +369,163 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
     );
   }
 
+  // =====================================================
+  // ✅ UI BARU: METODE PEMBAYARAN (REDESIGN)
+  // =====================================================
   Widget _buildPaymentMethodSelector() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          "Metode Pembayaran",
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        // Label seksi
+        Text(
+          "METODE PEMBAYARAN",
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: Colors.grey[600],
+            letterSpacing: 0.8,
+          ),
         ),
         const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: _paymentButton(
-                label: "Transfer Bank",
-                value: "manual",
-                icon: Icons.account_balance,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _paymentButton(
-                label: "Midtrans",
-                value: "midtrans",
-                icon: Icons.payment,
-              ),
-            ),
-          ],
+
+        // --- Opsi: Transfer Bank ---
+        _buildPaymentOptionCard(
+          value: "manual",
+          icon: Icons.account_balance_outlined,
+          label: "Transfer Bank",
+          description: "Konfirmasi manual via bukti transfer",
+          badgeLabel: "Gratis",
+          badgeColor: const Color(0xFFEAF3DE),
+          badgeTextColor: const Color(0xFF3B6D11),
+        ),
+
+        // Ekspansi: pilihan bank & upload (muncul saat Transfer Bank dipilih)
+        if (_paymentMethod == "manual") ...[
+          _buildBankChips(),
+          const SizedBox(height: 8),
+        ],
+
+        const SizedBox(height: 8),
+
+        // --- Opsi: Midtrans ---
+        _buildPaymentOptionCard(
+          value: "midtrans",
+          icon: Icons.credit_card_outlined,
+          label: "Midtrans",
+          description: "Kartu kredit, GoPay, OVO, QRIS",
+          badgeLabel: "Otomatis",
+          badgeColor: const Color(0xFFE6F1FB),
+          badgeTextColor: const Color(0xFF185FA5),
         ),
       ],
     );
   }
 
-  Widget _paymentButton({
-    required String label,
+  /// Kartu opsi pembayaran dengan radio button & badge
+  Widget _buildPaymentOptionCard({
     required String value,
     required IconData icon,
+    required String label,
+    required String description,
+    required String badgeLabel,
+    required Color badgeColor,
+    required Color badgeTextColor,
   }) {
     final isSelected = _paymentMethod == value;
+
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          _paymentMethod = value;
-        });
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+      onTap: () => setState(() => _paymentMethod = value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFFDD835) : Colors.white,
-          borderRadius: BorderRadius.circular(10),
+          color: isSelected ? const Color(0xFFFAEEDA) : Colors.white,
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected ? Colors.orange : Colors.grey[300]!,
-            width: isSelected ? 2 : 1,
+            color: isSelected ? const Color(0xFFBA7517) : Colors.grey[300]!,
+            width: isSelected ? 1.5 : 0.8,
           ),
         ),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              icon,
-              color: isSelected ? Colors.black87 : Colors.grey[600],
-              size: 20,
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                label,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                  color: isSelected ? Colors.black87 : Colors.grey[700],
-                  fontSize: 14,
+            // Radio button custom
+            Container(
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: isSelected ? const Color(0xFFBA7517) : Colors.grey[400]!,
+                  width: 2,
                 ),
+              ),
+              child: isSelected
+                  ? Center(
+                      child: Container(
+                        width: 10,
+                        height: 10,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Color(0xFFBA7517),
+                        ),
+                      ),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 12),
+
+            // Ikon metode
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, size: 20, color: Colors.grey[700]),
+            ),
+            const SizedBox(width: 12),
+
+            // Nama & deskripsi
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        label,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: badgeColor,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          badgeLabel,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: badgeTextColor,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    description,
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                ],
               ),
             ),
           ],
@@ -449,7 +533,47 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
       ),
     );
   }
-  
+
+  /// Chip pilihan bank (BCA, BRI, Mandiri, BNI)
+  Widget _buildBankChips() {
+    final banks = ["BCA", "BRI", "Mandiri", "BNI"];
+    return Padding(
+      padding: const EdgeInsets.only(left: 32, top: 6),
+      child: Wrap(
+        spacing: 8,
+        children: banks.map((bank) {
+          final isSelected = _selectedBank == bank;
+          return GestureDetector(
+            onTap: () => setState(() => _selectedBank = bank),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                color: isSelected ? const Color(0xFFFAEEDA) : Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isSelected ? const Color(0xFFBA7517) : Colors.grey[300]!,
+                  width: isSelected ? 1.5 : 0.8,
+                ),
+              ),
+              child: Text(
+                bank,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                  color: isSelected ? const Color(0xFF633806) : Colors.grey[700],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  // =====================================================
+  // ✅ UI BARU: UPLOAD BUKTI PEMBAYARAN (REDESIGN)
+  // =====================================================
   Widget _buildPaymentForm() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -459,40 +583,89 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
         ),
         const SizedBox(height: 10),
-        Container(
-          width: double.infinity,
-          height: 150,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.grey[300]!),
-          ),
-          child: InkWell(
-            onTap: _pickImage,
+        GestureDetector(
+          onTap: _pickImage,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: double.infinity,
+            height: 150,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: _buktiPembayaranFile != null
+                    ? const Color(0xFFBA7517)
+                    : Colors.grey[350]!,
+                width: _buktiPembayaranFile != null ? 1.5 : 1,
+                // Dashed border menggunakan CustomPainter tidak tersedia di Container,
+                // border solid sudah cukup profesional untuk Flutter native.
+              ),
+            ),
             child: _buktiPembayaranFile == null
-                ? const Column(
+                ? Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.cloud_upload_outlined, size: 40, color: Colors.grey),
-                      SizedBox(height: 8),
+                      Icon(
+                        Icons.cloud_upload_outlined,
+                        size: 36,
+                        color: Colors.grey[400],
+                      ),
+                      const SizedBox(height: 8),
                       Text(
-                        "Ketuk untuk memilih gambar",
-                        style: TextStyle(color: Colors.grey),
+                        "Upload bukti pembayaran",
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey[600],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        "JPG, PNG, atau PDF · Maks 5 MB",
+                        style: TextStyle(fontSize: 11, color: Colors.grey[400]),
                       ),
                     ],
                   )
                 : ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: kIsWeb
-                        ? Image.network(_buktiPembayaranFile!.path, fit: BoxFit.cover)
-                        : Image.file(File(_buktiPembayaranFile!.path), fit: BoxFit.cover),
+                    borderRadius: BorderRadius.circular(11),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        kIsWeb
+                            ? Image.network(_buktiPembayaranFile!.path, fit: BoxFit.cover)
+                            : Image.file(File(_buktiPembayaranFile!.path), fit: BoxFit.cover),
+                        // Overlay "Ganti" di pojok kanan bawah
+                        Positioned(
+                          bottom: 8,
+                          right: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.55),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.edit, size: 12, color: Colors.white),
+                                SizedBox(width: 4),
+                                Text(
+                                  "Ganti",
+                                  style: TextStyle(fontSize: 11, color: Colors.white),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
           ),
         ),
       ],
     );
   }
-  
+
   Widget _buildReservationSummary() {
     final reservationTime = _reservationData?['reservation_time'] as DateTime?;
     final formattedTime = reservationTime != null
@@ -590,6 +763,9 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
     );
   }
 
+  // =====================================================
+  // ✅ UI BARU: BOTTOM BAR (REDESIGN)
+  // =====================================================
   Widget _buildBottomBar() {
     final total = _calculateTotal();
     final currencyFormatter = NumberFormat.currency(
@@ -599,7 +775,7 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
     );
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
       decoration: const BoxDecoration(
         color: Colors.white,
         boxShadow: [
@@ -613,24 +789,59 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Baris subtotal (bisa dikembangkan untuk ongkir dsb)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text("Subtotal", style: TextStyle(fontSize: 13, color: Colors.grey[600])),
+              Text(currencyFormatter.format(total),
+                  style: TextStyle(fontSize: 13, color: Colors.grey[700])),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text("Biaya pengiriman", style: TextStyle(fontSize: 13, color: Colors.grey[600])),
+              Text("Rp 0", style: TextStyle(fontSize: 13, color: Colors.grey[700])),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text("Biaya layanan", style: TextStyle(fontSize: 13, color: Colors.grey[600])),
+              Text("Rp 0", style: TextStyle(fontSize: 13, color: Colors.grey[700])),
+            ],
+          ),
+
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 10),
+            child: Divider(height: 1, thickness: 0.8),
+          ),
+
+          // Baris total utama
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
                 "Total Pesanan:",
-                style: TextStyle(fontSize: 16, color: Colors.grey),
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87),
               ),
               Text(
                 currencyFormatter.format(total),
                 style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
-                  color: Colors.orange,
+                  color: Color(0xFFBA7517),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
+
+          const SizedBox(height: 14),
+
+          // Tombol order
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
@@ -638,7 +849,9 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFDD835),
                 foregroundColor: Colors.black87,
+                disabledBackgroundColor: Colors.grey[300],
                 padding: const EdgeInsets.symmetric(vertical: 16),
+                elevation: 0,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -657,6 +870,21 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
             ),
+          ),
+
+          const SizedBox(height: 8),
+
+          // Catatan keamanan SSL
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.lock_outline, size: 12, color: Colors.grey[400]),
+              const SizedBox(width: 4),
+              Text(
+                "Transaksi dilindungi enkripsi SSL",
+                style: TextStyle(fontSize: 11, color: Colors.grey[400]),
+              ),
+            ],
           ),
         ],
       ),
